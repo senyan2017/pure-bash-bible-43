@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# shellcheck source=/dev/null disable=2178,2128
+# shellcheck disable=SC2178,SC2128
 #
 # Tests for the Pure Bash Bible.
+#
+# Lint + run the unit tests:    ./test.sh
+# Build, lint and test at once: ./check.sh
+
+# The rule for finding code in README.md lives in lib.sh (extract_code).
+# shellcheck source=lib.sh
+. ./lib.sh
 
 test_trim_string() {
     result="$(trim_string "    Hello,    World    ")"
@@ -219,17 +226,22 @@ assert_equals() {
 }
 
 main() {
-    trap 'rm readme_code test_file' EXIT
+    trap 'rm -f readme_code test_file' EXIT
 
-    # Extract code blocks from the README.
-    while IFS=$'\n' read -r line; do
-        [[ "$code" && "$line" != \`\`\` ]] && printf '%s\n' "$line"
-        [[ "$line" =~ ^\`\`\`sh$ ]] && code=1
-        [[ "$line" =~ ^\`\`\`$ ]]   && code=
-    done < README.md > readme_code
+    # Extract the README's code blocks using the shared rule in lib.sh.
+    extract_code > readme_code
 
-    # Run shellcheck and source the code.
-    shellcheck -s bash readme_code test.sh build.sh || exit 1
+    # Lint the toolchain strictly...
+    shellcheck -s bash lib.sh build.sh test.sh check.sh || exit 1
+
+    # ...and the README's example code leniently. These codes flag a few
+    # intentional teaching patterns, not bugs:
+    #   SC2295 - "${1##$2}" uses $2 as a glob on purpose (strip/lstrip/rstrip)
+    #   SC2141 - IFS=';t' is deliberate in get_term_size
+    #   SC2329 - functions look "unused" because their tests live in test.sh
+    shellcheck -s bash --exclude=SC2295,SC2141,SC2329 readme_code || exit 1
+
+    # shellcheck source=/dev/null
     . readme_code
 
     head="-> Running tests on the Pure Bash Bible.."

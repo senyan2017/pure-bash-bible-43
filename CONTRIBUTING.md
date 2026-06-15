@@ -4,8 +4,9 @@
 
 * [Adding Code to the Bible.](#adding-code-to-the-bible)
 * [Special meanings for code blocks.](#special-meanings-for-code-blocks)
+* [Chapter markers](#chapter-markers)
 * [Writing tests](#writing-tests)
-* [Running tests](#running-tests)
+* [Building and testing](#building-and-testing)
 
 <!-- vim-markdown-toc -->
 
@@ -42,6 +43,20 @@ Use `shell` for code that should be ignored.
     :>file
     ```
 
+## Chapter markers
+
+The book under `manuscript/` is generated from this same README by splitting
+it into chapters. A chapter is everything between two HTML-comment markers:
+
+    <!-- CHAPTER START -->
+    ## Some heading
+    ...
+    <!-- CHAPTER END -->
+
+`build.sh` writes one `chapterN.txt` per region. You rarely edit this by hand —
+just keep a new section inside a `START`/`END` pair if it should appear in the
+book.
+
 ## Writing tests
 
 The test file is viewable here: https://github.com/dylanaraps/pure-bash-bible/blob/master/test.sh
@@ -65,11 +80,26 @@ Steps:
 2. The test script will automatically execute it. :+1:
 
 
-## Running tests
+## Building and testing
 
-Running `test.sh` also runs `shellcheck` on the code.
+After editing `README.md`, run one command to confirm the book still builds
+and the code still lints and passes its tests:
 
 ```sh
 cd pure-bash-bible
-./test.sh
+./check.sh
 ```
+
+That is all a contributor needs. `check.sh` just chains the two
+single-purpose scripts, which you can also run on their own:
+
+| Script     | Responsibility |
+| ---------- | -------------- |
+| `lib.sh`   | The one place that knows the README's structure (the code-fence and chapter rules) and exposes `extract_code` / `extract_chapters`. Sourced, never run directly. |
+| `build.sh` | Assembles `manuscript/` from the chapters `lib.sh` finds. |
+| `test.sh`  | Runs `shellcheck` and the unit tests on the `sh` code `lib.sh` finds. |
+| `check.sh` | The entry point: runs `build.sh`, then `test.sh`. |
+
+Because every script gets its view of the README from `lib.sh`, changing a
+Markdown rule (a new code-fence convention, different chapter markers) means
+editing `lib.sh` only — never the build or test scripts.

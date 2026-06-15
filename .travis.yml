@@ -4,4 +4,4 @@ os:
     - linux
 
 script:
-    - ./test.sh
+    - ./check.sh

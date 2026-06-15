@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 #
-# Turn the single document bible into a book separated by chapters.
+# Build step: turn the single README.md into a per-chapter manuscript.
+#
+# Responsibility: lay the chapters out on disk. *Where* a chapter begins and
+# ends is defined once in lib.sh (the CHAPTER markers); this script never
+# parses Markdown itself.
+
+# shellcheck source=lib.sh
+. ./lib.sh
 
 main() {
     rm -rf manuscript
     mkdir -p manuscript
 
-    # Split the README.md into chapters based on markers.
-    while IFS=$'\n' read -r line; do
-        [[ "$chap" ]] && chapter[$i]+="$line"$'\n'
-        [[ "$line" == "<!-- CHAPTER START -->" ]] && chap=1
-        [[ "$line" == "<!-- CHAPTER END -->" ]]   && { chap=; ((i++)); }
-    done < README.md
-
-    # Write the chapters to separate files.
-    for i in "${!chapter[@]}"; do
-        : "${chapter[$i]/$'\n'*}"; : "${_/\# }"; : "${_,,}"
-        printf '%s\n' "${chapter[$i]}" > "manuscript/chapter${i}.txt"
-        printf '%s\n' "chapter${i}.txt" >> "manuscript/Book.txt"
-    done
+    local i=0 chapter
+    while IFS= read -r -d '' chapter; do
+        printf '%s\n' "$chapter"        > "manuscript/chapter${i}.txt"
+        printf '%s\n' "chapter${i}.txt" >> manuscript/Book.txt
+        ((i+=1))
+    done < <(extract_chapters)
 }
 
-main
+main "$@"
