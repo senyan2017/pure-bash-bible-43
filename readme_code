@@ -1,0 +1,419 @@
+# shellcheck disable=SC2295,SC2329,SC2141
+trim_string() {
+    # Usage: trim_string "   example   string    "
+    : "${1#"${1%%[![:space:]]*}"}"
+    : "${_%"${_##*[![:space:]]}"}"
+    printf '%s\n' "$_"
+}
+# shellcheck disable=SC2086,SC2048
+trim_all() {
+    # Usage: trim_all "   example   string    "
+    set -f
+    set -- $*
+    printf '%s\n' "$*"
+    set +f
+}
+regex() {
+    # Usage: regex "string" "regex"
+    [[ $1 =~ $2 ]] && printf '%s\n' "${BASH_REMATCH[1]}"
+}
+split() {
+   # Usage: split "string" "delimiter"
+   IFS=$'\n' read -d "" -ra arr <<< "${1//$2/$'\n'}"
+   printf '%s\n' "${arr[@]}"
+}
+lower() {
+    # Usage: lower "string"
+    printf '%s\n' "${1,,}"
+}
+upper() {
+    # Usage: upper "string"
+    printf '%s\n' "${1^^}"
+}
+reverse_case() {
+    # Usage: reverse_case "string"
+    printf '%s\n' "${1~~}"
+}
+trim_quotes() {
+    # Usage: trim_quotes "string"
+    : "${1//\'}"
+    printf '%s\n' "${_//\"}"
+}
+strip_all() {
+    # Usage: strip_all "string" "pattern"
+    printf '%s\n' "${1//$2}"
+}
+strip() {
+    # Usage: strip "string" "pattern"
+    printf '%s\n' "${1/$2}"
+}
+lstrip() {
+    # Usage: lstrip "string" "pattern"
+    printf '%s\n' "${1##$2}"
+}
+rstrip() {
+    # Usage: rstrip "string" "pattern"
+    printf '%s\n' "${1%%$2}"
+}
+urlencode() {
+    # Usage: urlencode "string"
+    local LC_ALL=C
+    for (( i = 0; i < ${#1}; i++ )); do
+        : "${1:i:1}"
+        case "$_" in
+            [a-zA-Z0-9.~_-])
+                printf '%s' "$_"
+            ;;
+
+            *)
+                printf '%%%02X' "'$_"
+            ;;
+        esac
+    done
+    printf '\n'
+}
+urldecode() {
+    # Usage: urldecode "string"
+    : "${1//+/ }"
+    printf '%b\n' "${_//%/\\x}"
+}
+reverse_array() {
+    # Usage: reverse_array "array"
+    shopt -s extdebug
+    f()(printf '%s\n' "${BASH_ARGV[@]}"); f "$@"
+    shopt -u extdebug
+}
+remove_array_dups() {
+    # Usage: remove_array_dups "array"
+    declare -A tmp_array
+
+    for i in "$@"; do
+        [[ $i ]] && IFS=" " tmp_array["${i:- }"]=1
+    done
+
+    printf '%s\n' "${!tmp_array[@]}"
+}
+random_array_element() {
+    # Usage: random_array_element "array"
+    local arr=("$@")
+    printf '%s\n' "${arr[RANDOM % $#]}"
+}
+arr=(a b c d)
+
+cycle() {
+    printf '%s ' "${arr[${i:=0}]}"
+    ((i=i>=${#arr[@]}-1?0:++i))
+}
+arr=(true false)
+
+cycle() {
+    printf '%s ' "${arr[${i:=0}]}"
+    ((i=i>=${#arr[@]}-1?0:++i))
+}
+head() {
+    # Usage: head "n" "file"
+    mapfile -tn "$1" line < "$2"
+    printf '%s\n' "${line[@]}"
+}
+tail() {
+    # Usage: tail "n" "file"
+    mapfile -tn 0 line < "$2"
+    printf '%s\n' "${line[@]: -$1}"
+}
+lines() {
+    # Usage: lines "file"
+    mapfile -tn 0 lines < "$1"
+    printf '%s\n' "${#lines[@]}"
+}
+lines_loop() {
+    # Usage: lines_loop "file"
+    count=0
+    while IFS= read -r _; do
+        ((count++))
+    done < "$1"
+    printf '%s\n' "$count"
+}
+count() {
+    # Usage: count /path/to/dir/*
+    #        count /path/to/dir/*/
+    printf '%s\n' "$#"
+}
+extract() {
+    # Usage: extract file "opening marker" "closing marker"
+    while IFS=$'\n' read -r line; do
+        [[ $extract && $line != "$3" ]] &&
+            printf '%s\n' "$line"
+
+        [[ $line == "$2" ]] && extract=1
+        [[ $line == "$3" ]] && extract=
+    done < "$1"
+}
+dirname() {
+    # Usage: dirname "path"
+    local tmp=${1:-.}
+
+    [[ $tmp != *[!/]* ]] && {
+        printf '/\n'
+        return
+    }
+
+    tmp=${tmp%%"${tmp##*[!/]}"}
+
+    [[ $tmp != */* ]] && {
+        printf '.\n'
+        return
+    }
+
+    tmp=${tmp%/*}
+    tmp=${tmp%%"${tmp##*[!/]}"}
+
+    printf '%s\n' "${tmp:-/}"
+}
+basename() {
+    # Usage: basename "path" ["suffix"]
+    local tmp
+
+    tmp=${1%"${1##*[!/]}"}
+    tmp=${tmp##*/}
+    tmp=${tmp%"${2/"$tmp"}"}
+
+    printf '%s\n' "${tmp:-/}"
+}
+load_env_file() {
+    # Usage: load_env_file "/path/to/.env"
+    # Prints KEY=VALUE lines safe to eval or source.
+    local file="${1:?usage: load_env_file <file>}"
+    local line key val
+
+    if [[ ! -f "$file" || ! -r "$file" ]]; then
+        printf 'error: cannot read file: %s\n' "$file" >&2
+        return 1
+    fi
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Trim leading whitespace.
+        line="${line#"${line%%[![:space:]]*}"}"
+
+        # Skip blank lines and comment lines.
+        [[ -z "$line" || "$line" == \#* ]] && continue
+
+        # Must contain '='.
+        [[ "$line" != *=* ]] && continue
+
+        key="${line%%=*}"
+        val="${line#*=}"
+
+        # Strip surrounding single quotes.
+        if [[ "$val" == \'*\' ]]; then
+            val="${val#\'}"
+            val="${val%\'}"
+
+        # Strip surrounding double quotes.
+        elif [[ "$val" == \"*\" ]]; then
+            val="${val#\"}"
+            val="${val%\"}"
+
+        else
+            # Strip inline comment for unquoted values.
+            val="${val%%#*}"
+            # Trim trailing whitespace.
+            val="${val%"${val##*[![:space:]]}"}"
+        fi
+
+        printf '%s=%s\n' "$key" "$val"
+    done < "$file"
+}
+# Global associative array backing the store.
+declare -gA __kv_store=()
+
+kv_set() {
+    # Usage: kv_set "key" "value"
+    __kv_store["$1"]="$2"
+}
+
+kv_get() {
+    # Usage: kv_get "key" ["default"]
+    # Prints the value, or the default if the key is unset.
+    if [[ -v __kv_store["$1"] ]]; then
+        printf '%s\n' "${__kv_store[$1]}"
+    elif [[ -n "${2+set}" ]]; then
+        printf '%s\n' "$2"
+    fi
+}
+ensure_dirs() {
+    # Usage: ensure_dirs "dir1" "dir2" ...
+    # Creates each directory (with parents) if it does not exist.
+    # Returns 1 on the first failure.
+    local dir
+    for dir in "$@"; do
+        if [[ ! -d "$dir" ]]; then
+            if ! mkdir -p -- "$dir" 2>/dev/null; then
+                printf 'error: failed to create directory: %s\n' "$dir" >&2
+                return 1
+            fi
+        fi
+    done
+}
+check_commands() {
+    # Usage: check_commands "cmd1" "cmd2" ...
+    # Exits with status 1 listing all missing commands.
+    local cmd missing=()
+    for cmd in "$@"; do
+        if ! type -p -- "$cmd" &>/dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+    if ((${#missing[@]} > 0)); then
+        printf 'error: missing required commands: %s\n' "${missing[*]}" >&2
+        exit 1
+    fi
+}
+require_vars() {
+    # Usage: require_vars "VAR1" "VAR2" ...
+    # Exits with status 1 listing all unset or empty variables.
+    local var unset_vars=()
+    for var in "$@"; do
+        if [[ -z "${!var+set}" || -z "${!var}" ]]; then
+            unset_vars+=("$var")
+        fi
+    done
+    if ((${#unset_vars[@]} > 0)); then
+        printf 'error: required variables not set: %s\n' \
+            "${unset_vars[*]}" >&2
+        exit 1
+    fi
+}
+set_defaults() {
+    # Usage: set_defaults VAR1=default1 VAR2=default2 ...
+    # Sets each variable to its default only if unset or empty.
+    local pair var default
+    for pair in "$@"; do
+        var="${pair%%=*}"
+        default="${pair#*=}"
+        if [[ -z "${!var+set}" || -z "${!var}" ]]; then
+            printf -v "$var" '%s' "$default"
+        fi
+    done
+}
+mk_temp_dir() {
+    # Usage: mk_temp_dir
+    # Creates a temporary directory and registers an EXIT trap
+    # to remove it.  Prints the directory path.
+    local dir="${TMPDIR:-/tmp}/bash_$$_${RANDOM}"
+    mkdir -p -- "$dir" || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf -- '$dir'" EXIT
+    printf '%s\n' "$dir"
+}
+lock_acquire() {
+    # Usage: lock_acquire "/path/to/lockfile"
+    # Uses mkdir as an atomic test-and-set.
+    # Registers an EXIT trap to release the lock.
+    local lockfile="${1:?usage: lock_acquire <lockfile>}"
+    if ! mkdir -- "$lockfile" 2>/dev/null; then
+        printf 'error: could not acquire lock: %s\n' "$lockfile" >&2
+        printf '       another instance may be running.\n' >&2
+        return 1
+    fi
+    # shellcheck disable=SC2064
+    trap "rmdir -- '$lockfile' 2>/dev/null" EXIT
+}
+
+lock_release() {
+    # Usage: lock_release "/path/to/lockfile"
+    rmdir -- "$1" 2>/dev/null
+}
+get_term_size() {
+    # Usage: get_term_size
+
+    # (:;:) is a micro sleep to ensure the variables are
+    # exported immediately.
+    shopt -s checkwinsize; (:;:)
+    printf '%s\n' "$LINES $COLUMNS"
+}
+get_window_size() {
+    # Usage: get_window_size
+    printf '%b' "${TMUX:+\\ePtmux;\\e}\\e[14t${TMUX:+\\e\\\\}"
+    IFS=';t' read -d t -t 0.05 -sra term_size
+    printf '%s\n' "${term_size[1]}x${term_size[2]}"
+}
+get_cursor_pos() {
+    # Usage: get_cursor_pos
+    IFS='[;' read -p $'\e[6n' -d R -rs _ y x _
+    printf '%s\n' "$x $y"
+}
+hex_to_rgb() {
+    # Usage: hex_to_rgb "#FFFFFF"
+    #        hex_to_rgb "000000"
+    : "${1/\#}"
+    ((r=16#${_:0:2},g=16#${_:2:2},b=16#${_:4:2}))
+    printf '%s\n' "$r $g $b"
+}
+rgb_to_hex() {
+    # Usage: rgb_to_hex "r" "g" "b"
+    printf '#%02x%02x%02x\n' "$1" "$2" "$3"
+}
+read_sleep() {
+    # Usage: read_sleep 1
+    #        read_sleep 0.2
+    read -rt "$1" <> <(:) || :
+}
+date() {
+    # Usage: date "format"
+    # See: 'man strftime' for format.
+    printf "%($1)T\\n" "-1"
+}
+uuid() {
+    # Usage: uuid
+    C="89ab"
+
+    for ((N=0;N<16;++N)); do
+        B="$((RANDOM%256))"
+
+        case "$N" in
+            6)  printf '4%x' "$((B%16))" ;;
+            8)  printf '%c%x' "${C:$RANDOM%${#C}:1}" "$((B%16))" ;;
+
+            3|5|7|9)
+                printf '%02x-' "$B"
+            ;;
+
+            *)
+                printf '%02x' "$B"
+            ;;
+        esac
+    done
+
+    printf '\n'
+}
+bar() {
+    # Usage: bar 1 10
+    #            ^----- Elapsed Percentage (0-100).
+    #               ^-- Total length in chars.
+    ((elapsed=$1*$2/100))
+
+    # Create the bar with spaces.
+    printf -v prog  "%${elapsed}s"
+    printf -v total "%$(($2-elapsed))s"
+
+    printf '%s\r' "[${prog// /-}${total}]"
+}
+get_functions() {
+    # Usage: get_functions
+    IFS=$'\n' read -d "" -ra functions < <(declare -F)
+    printf '%s\n' "${functions[@]//declare -f }"
+}
+bkr() {
+    (nohup "$@" &>/dev/null &)
+}
+
+bkr ./some_script.sh # some_script.sh is now running in the background
+to_upper() {
+  local -n ptr=${1}
+
+  ptr=${ptr^^}
+}
+
+foo="bar"
+to_upper foo
+printf "%s\n" "${foo}" # BAR

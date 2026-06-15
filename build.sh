@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2004
 #
 # Turn the single document bible into a book separated by chapters.
 

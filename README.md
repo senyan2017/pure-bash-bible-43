@@ -120,6 +120,15 @@ See something incorrectly described, buggy or outright wrong? Open an issue or s
     * [React to window resize](#react-to-window-resize)
     * [Do something before every command](#do-something-before-every-command)
     * [Do something when a shell function or a sourced file finishes executing](#do-something-when-a-shell-function-or-a-sourced-file-finishes-executing)
+* [DEVOPS SETUP](#devops-setup)
+    * [Parse an environment file](#parse-an-environment-file)
+    * [Key-value configuration store](#key-value-configuration-store)
+    * [Initialize required directories](#initialize-required-directories)
+    * [Verify required commands exist](#verify-required-commands-exist)
+    * [Require variables to be set](#require-variables-to-be-set)
+    * [Merge default configuration values](#merge-default-configuration-values)
+    * [Create a temporary directory with cleanup](#create-a-temporary-directory-with-cleanup)
+    * [Lock file for mutual exclusion](#lock-file-for-mutual-exclusion)
 * [PERFORMANCE](#performance)
     * [Disable Unicode](#disable-unicode)
 * [OBSOLETE SYNTAX](#obsolete-syntax)
@@ -1546,6 +1555,427 @@ trap 'code_here' DEBUG
 
 ```shell
 trap 'code_here' RETURN
+```
+
+<!-- CHAPTER END -->
+
+<!-- CHAPTER START -->
+# DEVOPS SETUP
+
+Scripts used for environment setup, deployments and configuration management
+repeatedly face the same small problems: reading `.env` files, looking up
+configuration values, making sure required directories and commands exist, and
+coordinating concurrent runs. The snippets below solve these with pure `bash`,
+no external commands required.
+
+## Parse an environment file
+
+Alternative to `source .env` or tools like `direnv`. The function below
+reads a `.env`-style file line by line, skips comments and blank lines,
+strips surrounding quotes from values, trims inline comments from unquoted
+values, and prints clean `KEY=VALUE` pairs safe to `eval` or `source`.
+
+Handles: blank lines, `#` comment lines, single and double quoted values,
+unquoted values with trailing inline comments, values containing spaces,
+values containing `=` signs, empty values, and missing or unreadable files.
+
+**CAVEAT:** Variable expansion inside quoted values (e.g. `"$HOME"`) is
+**not** performed. Values are taken literally. This avoids accidentally
+executing arbitrary code embedded in the file.
+
+**Example Function:**
+
+```sh
+load_env_file() {
+    # Usage: load_env_file "/path/to/.env"
+    # Prints KEY=VALUE lines safe to eval or source.
+    local file="${1:?usage: load_env_file <file>}"
+    local line key val
+
+    if [[ ! -f "$file" || ! -r "$file" ]]; then
+        printf 'error: cannot read file: %s\n' "$file" >&2
+        return 1
+    fi
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Trim leading whitespace.
+        line="${line#"${line%%[![:space:]]*}"}"
+
+        # Skip blank lines and comment lines.
+        [[ -z "$line" || "$line" == \#* ]] && continue
+
+        # Must contain '='.
+        [[ "$line" != *=* ]] && continue
+
+        key="${line%%=*}"
+        val="${line#*=}"
+
+        # Strip surrounding single quotes.
+        if [[ "$val" == \'*\' ]]; then
+            val="${val#\'}"
+            val="${val%\'}"
+
+        # Strip surrounding double quotes.
+        elif [[ "$val" == \"*\" ]]; then
+            val="${val#\"}"
+            val="${val%\"}"
+
+        else
+            # Strip inline comment for unquoted values.
+            val="${val%%#*}"
+            # Trim trailing whitespace.
+            val="${val%"${val##*[![:space:]]}"}"
+        fi
+
+        printf '%s=%s\n' "$key" "$val"
+    done < "$file"
+}
+```
+
+**Example Usage:**
+
+```shell
+$ cat .env
+# Database configuration
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME="my application"
+DB_PASS='s3cr#t'
+APP_ENV=production  # inline comment
+EMPTY_VAR=
+
+$ load_env_file .env
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=my application
+DB_PASS=s3cr#t
+APP_ENV=production
+EMPTY_VAR=
+
+# Load directly into the current shell:
+$ eval "$(load_env_file .env)"
+$ printf '%s\n' "$DB_HOST"
+localhost
+
+# Load into a separate namespace (bash 4+):
+$ declare -A config
+$ while IFS='=' read -r k v; do
+      config["$k"]="$v"
+  done < <(load_env_file .env)
+```
+
+## Key-value configuration store
+
+A lightweight in-memory key-value store using a global associative array.
+Useful for accumulating configuration from multiple sources (defaults,
+config files, command-line overrides) without spawning external tools.
+
+**CAVEAT:** Requires `bash` 4+
+
+**Example Function:**
+
+```sh
+# Global associative array backing the store.
+declare -gA __kv_store=()
+
+kv_set() {
+    # Usage: kv_set "key" "value"
+    __kv_store["$1"]="$2"
+}
+
+kv_get() {
+    # Usage: kv_get "key" ["default"]
+    # Prints the value, or the default if the key is unset.
+    if [[ -v __kv_store["$1"] ]]; then
+        printf '%s\n' "${__kv_store[$1]}"
+    elif [[ -n "${2+set}" ]]; then
+        printf '%s\n' "$2"
+    fi
+}
+```
+
+**Example Usage:**
+
+```shell
+$ kv_set "db_host" "localhost"
+$ kv_set "db_port" "5432"
+$ kv_set "app_name" "my cool app"
+
+$ kv_get "db_host"
+localhost
+
+$ kv_get "app_name"
+my cool app
+
+# Key that does not exist (prints nothing).
+$ kv_get "missing_key"
+
+# Key with a fallback default.
+$ kv_get "missing_key" "fallback_value"
+fallback_value
+
+# Duplicate keys: last write wins.
+$ kv_set "db_port" "3306"
+$ kv_get "db_port"
+3306
+
+# Empty value is distinct from unset.
+$ kv_set "empty" ""
+$ kv_get "empty" "default"
+
+# Populate from a .env file:
+$ while IFS='=' read -r k v; do
+      kv_set "$k" "$v"
+  done < <(load_env_file .env)
+```
+
+## Initialize required directories
+
+Ensure runtime directories exist before the script proceeds. This
+is an alternative to calling `mkdir -p` as an external command.
+
+**Example Function:**
+
+```sh
+ensure_dirs() {
+    # Usage: ensure_dirs "dir1" "dir2" ...
+    # Creates each directory (with parents) if it does not exist.
+    # Returns 1 on the first failure.
+    local dir
+    for dir in "$@"; do
+        if [[ ! -d "$dir" ]]; then
+            if ! mkdir -p -- "$dir" 2>/dev/null; then
+                printf 'error: failed to create directory: %s\n' "$dir" >&2
+                return 1
+            fi
+        fi
+    done
+}
+```
+
+**Example Usage:**
+
+```shell
+$ ensure_dirs "$HOME/.myapp/logs" "$HOME/.myapp/cache" "$HOME/.myapp/tmp"
+
+# Combine with a base path variable:
+$ BASE="/opt/myapp"
+$ ensure_dirs "$BASE/logs" "$BASE/data" "$BASE/tmp"
+
+# Handles already-existing directories gracefully:
+$ ensure_dirs "/tmp"
+# (no error, /tmp already exists)
+```
+
+## Verify required commands exist
+
+Check that all required external commands are available in `PATH`
+before doing real work. This avoids cryptic failures deep inside
+a script when a dependency is missing.
+
+**Example Function:**
+
+```sh
+check_commands() {
+    # Usage: check_commands "cmd1" "cmd2" ...
+    # Exits with status 1 listing all missing commands.
+    local cmd missing=()
+    for cmd in "$@"; do
+        if ! type -p -- "$cmd" &>/dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+    if ((${#missing[@]} > 0)); then
+        printf 'error: missing required commands: %s\n' "${missing[*]}" >&2
+        exit 1
+    fi
+}
+```
+
+**Example Usage:**
+
+```shell
+# Put this near the top of your script.
+$ check_commands "git" "curl" "jq"
+
+# If 'jq' is not installed:
+# error: missing required commands: jq
+
+# If multiple are missing, all are reported at once:
+# error: missing required commands: curl jq
+```
+
+## Require variables to be set
+
+Validate that essential variables have been assigned before the
+script continues. This catches configuration mistakes early
+instead of failing silently with empty strings.
+
+**Example Function:**
+
+```sh
+require_vars() {
+    # Usage: require_vars "VAR1" "VAR2" ...
+    # Exits with status 1 listing all unset or empty variables.
+    local var unset_vars=()
+    for var in "$@"; do
+        if [[ -z "${!var+set}" || -z "${!var}" ]]; then
+            unset_vars+=("$var")
+        fi
+    done
+    if ((${#unset_vars[@]} > 0)); then
+        printf 'error: required variables not set: %s\n' \
+            "${unset_vars[*]}" >&2
+        exit 1
+    fi
+}
+```
+
+**Example Usage:**
+
+```shell
+$ DB_HOST="localhost"
+$ DB_PORT="5432"
+$ require_vars "DB_HOST" "DB_PORT"
+# (passes silently)
+
+$ require_vars "DB_HOST" "DB_USER" "DB_PASS"
+# error: required variables not set: DB_USER DB_PASS
+
+# Combine with load_env_file for a full config check:
+$ eval "$(load_env_file .env)"
+$ require_vars "DB_HOST" "DB_PORT" "APP_ENV"
+```
+
+## Merge default configuration values
+
+Apply a set of default values to variables that are unset or empty.
+This avoids long chains of `${VAR:-default}` and keeps default
+definitions in one place.
+
+**Example Function:**
+
+```sh
+set_defaults() {
+    # Usage: set_defaults VAR1=default1 VAR2=default2 ...
+    # Sets each variable to its default only if unset or empty.
+    local pair var default
+    for pair in "$@"; do
+        var="${pair%%=*}"
+        default="${pair#*=}"
+        if [[ -z "${!var+set}" || -z "${!var}" ]]; then
+            printf -v "$var" '%s' "$default"
+        fi
+    done
+}
+```
+
+**Example Usage:**
+
+```shell
+# User has set APP_HOST but not APP_PORT or APP_WORKERS.
+$ APP_HOST="0.0.0.0"
+
+$ set_defaults "APP_HOST=localhost" "APP_PORT=8080" "APP_WORKERS=4"
+
+$ printf '%s\n' "$APP_HOST" "$APP_PORT" "$APP_WORKERS"
+0.0.0.0
+8080
+4
+
+# All defaults applied when no variables are set:
+$ unset APP_HOST APP_PORT APP_WORKERS
+$ set_defaults "APP_HOST=localhost" "APP_PORT=8080" "APP_WORKERS=4"
+$ printf '%s\n' "$APP_HOST"
+localhost
+
+# Works with values containing spaces:
+$ set_defaults "APP_NAME=my cool app"
+$ printf '%s\n' "$APP_NAME"
+my cool app
+```
+
+## Create a temporary directory with cleanup
+
+Create a temporary directory that is automatically removed when
+the script exits. This is an alternative to `mktemp -d` combined
+with manual trap management.
+
+**CAVEAT:** The `mktemp` builtin here is a thin wrapper that uses
+`$$` and `$RANDOM` for the directory name. For security-sensitive
+applications, use the system `mktemp` command instead.
+
+**Example Function:**
+
+```sh
+mk_temp_dir() {
+    # Usage: mk_temp_dir
+    # Creates a temporary directory and registers an EXIT trap
+    # to remove it.  Prints the directory path.
+    local dir="${TMPDIR:-/tmp}/bash_$$_${RANDOM}"
+    mkdir -p -- "$dir" || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf -- '$dir'" EXIT
+    printf '%s\n' "$dir"
+}
+```
+
+**Example Usage:**
+
+```shell
+$ TMPDIR="$(mk_temp_dir)"
+$ printf '%s\n' "$TMPDIR"
+/tmp/bash_12345_6789
+
+# Use it for scratch files:
+$ printf 'data\n' > "$TMPDIR/scratch.txt"
+
+# Directory is automatically removed on script exit.
+```
+
+## Lock file for mutual exclusion
+
+Prevent multiple instances of the same script from running
+concurrently. This is useful for cron jobs, deployment scripts,
+or any task that must not overlap with itself.
+
+**Example Function:**
+
+```sh
+lock_acquire() {
+    # Usage: lock_acquire "/path/to/lockfile"
+    # Uses mkdir as an atomic test-and-set.
+    # Registers an EXIT trap to release the lock.
+    local lockfile="${1:?usage: lock_acquire <lockfile>}"
+    if ! mkdir -- "$lockfile" 2>/dev/null; then
+        printf 'error: could not acquire lock: %s\n' "$lockfile" >&2
+        printf '       another instance may be running.\n' >&2
+        return 1
+    fi
+    # shellcheck disable=SC2064
+    trap "rmdir -- '$lockfile' 2>/dev/null" EXIT
+}
+
+lock_release() {
+    # Usage: lock_release "/path/to/lockfile"
+    rmdir -- "$1" 2>/dev/null
+}
+```
+
+**Example Usage:**
+
+```shell
+# At the top of a cron-safe script:
+$ lock_acquire "/tmp/my_deploy.lock"
+# ... do work ...
+$ lock_release "/tmp/my_deploy.lock"
+
+# If another instance is already running:
+# error: could not acquire lock: /tmp/my_deploy.lock
+#        another instance may be running.
+
+# Lock is also released automatically on script exit (including
+# errors and signals caught by other EXIT traps).
 ```
 
 <!-- CHAPTER END -->
