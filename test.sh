@@ -205,6 +205,54 @@ test_split() {
     assert_equals "${result[*]}" "hello world my name is john"
 }
 
+test_read_env() {
+    printf '%s\n' \
+        "# a comment" \
+        "   # indented comment" \
+        "" \
+        "FOO=bar" \
+        "EMPTY=" \
+        "GREETING = hello world" \
+        "DUP=1" \
+        "DUP=2" \
+        "URL=proto://a=b" > test_file
+
+    declare -A conf
+    read_env test_file conf
+
+    assert_equals "${conf[FOO]}"      "bar"
+    assert_equals "${conf[EMPTY]}"    ""
+    assert_equals "${conf[GREETING]}" "hello world"
+    assert_equals "${conf[DUP]}"      "2"
+    assert_equals "${conf[URL]}"      "proto://a=b"
+}
+
+test_strip_comments() {
+    printf '%s\n' \
+        "# full-line comment" \
+        "   " \
+        "key=value   # inline comment" \
+        "plain" \
+        "  indented  " > test_file
+
+    result="$(strip_comments test_file)"
+    assert_equals "$result" $'key=value\nplain\nindented'
+}
+
+test_require_vars() {
+    # shellcheck disable=SC2034
+    set_var="value"
+    # shellcheck disable=SC2034
+    empty_var=""
+    unset missing_var
+
+    result="$(require_vars set_var empty_var missing_var 2>&1)"
+    assert_equals "$result" "missing required variable: empty_var missing_var"
+
+    result="$(require_vars set_var 2>&1 && printf 'ok\n')"
+    assert_equals "$result" "ok"
+}
+
 assert_equals() {
     if [[ "$1" == "$2" ]]; then
         ((pass+=1))

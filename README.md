@@ -82,6 +82,11 @@ See something incorrectly described, buggy or outright wrong? Open an issue or s
 * [FILE PATHS](#file-paths)
     * [Get the directory name of a file path](#get-the-directory-name-of-a-file-path)
     * [Get the base-name of a file path](#get-the-base-name-of-a-file-path)
+* [CONFIGURATION AND ENVIRONMENT](#configuration-and-environment)
+    * [Read an env file into an associative array](#read-an-env-file-into-an-associative-array)
+    * [Strip comments and blank lines from a file](#strip-comments-and-blank-lines-from-a-file)
+    * [Require that environment variables are set](#require-that-environment-variables-are-set)
+    * [Validate the environment before running a script](#validate-the-environment-before-running-a-script)
 * [VARIABLES](#variables)
     * [Assign and access a variable using a variable](#assign-and-access-a-variable-using-a-variable)
     * [Name a variable based on another variable](#name-a-variable-based-on-another-variable)
@@ -1132,6 +1137,215 @@ $ basename ~/Pictures/Wallpapers/1.jpg .jpg
 
 $ basename ~/Pictures/Downloads/
 Downloads
+```
+
+<!-- CHAPTER END -->
+
+<!-- CHAPTER START -->
+# CONFIGURATION AND ENVIRONMENT
+
+Day-to-day scripts spend a lot of time loading settings, reading `KEY=VALUE`
+files and bailing out early when something required is missing. These are
+common jobs that are usually handed off to `grep`, `sed`, `awk` or an
+unsafe `source`. The snippets below keep this work in pure `bash`, which
+avoids spawning external processes and never executes the contents of a
+config file as code.
+
+## Read an env file into an associative array
+
+This is a safer alternative to `source file` (*which executes its contents*)
+and to chains of `grep`/`cut`/`awk`. Each `KEY=VALUE` line is parsed into an
+associative array.
+
+The function splits on the **first** `=` only (*so values may themselves
+contain `=`*), trims surrounding white-space from both the key and the value
+(*interior spaces are kept*) and ignores blank lines. Only whole-line
+comments are skipped: a line whose first non-space character is `#`. A `#`
+*inside* a value is kept, so passwords and URLs survive intact. When a key
+appears more than once the last value wins, matching the behaviour of
+`export`.
+
+**CAVEAT:** Requires `bash` 4+ (*associative arrays*).
+
+**CAVEAT:** Values are read literally. Unlike `source`, this does **not**
+expand `$variables` or strip matching surrounding quotes.
+
+**Example Function:**
+
+```sh
+read_env() {
+    # Usage: read_env "file" "associative_array_name"
+    local -n _conf=$2
+    local line key val
+
+    while IFS= read -r line || [[ $line ]]; do
+        # Strip surrounding white-space from the line.
+        line=${line#"${line%%[![:space:]]*}"}
+        line=${line%"${line##*[![:space:]]}"}
+
+        # Skip blank lines and whole-line comments.
+        [[ -z $line || $line == '#'* ]] && continue
+
+        # Split on the first '=' only (values may contain '=').
+        key=${line%%=*}
+        val=${line#*=}
+
+        # Strip surrounding white-space from the key and value.
+        key=${key#"${key%%[![:space:]]*}"}
+        key=${key%"${key##*[![:space:]]}"}
+        val=${val#"${val%%[![:space:]]*}"}
+        val=${val%"${val##*[![:space:]]}"}
+
+        # The last value wins when a key is repeated.
+        _conf["$key"]=$val
+    done < "$1"
+}
+```
+
+**Example Usage:**
+
+```shell
+$ cat app.env
+# Database settings
+DATABASE_URL = postgres://localhost/app
+POOL_SIZE=10
+PASSWORD=p@ss#word
+
+$ declare -A config
+$ read_env app.env config
+
+$ printf '%s\n' "${config[DATABASE_URL]}"
+postgres://localhost/app
+
+$ # '#' is preserved inside values.
+$ printf '%s\n' "${config[PASSWORD]}"
+p@ss#word
+
+$ # A missing or empty key can fall back to a default.
+$ printf '%s\n' "${config[TIMEOUT]:-30}"
+30
+```
+
+## Strip comments and blank lines from a file
+
+This is an alternative to `grep -v '^#'`, `sed` and `awk` for cleaning up a
+config file before processing it. Everything from the first `#` on a line is
+removed, surrounding white-space is trimmed and blank lines are dropped.
+
+**CAVEAT:** Unlike `read_env` above, `#` is treated as a comment marker
+*anywhere* on the line, so do not use this on files where `#` may appear
+inside a value.
+
+**Example Function:**
+
+```sh
+strip_comments() {
+    # Usage: strip_comments "file"
+    local line
+    while IFS= read -r line || [[ $line ]]; do
+        # Remove everything from the first '#' (inline comments).
+        line=${line%%#*}
+
+        # Strip surrounding white-space.
+        line=${line#"${line%%[![:space:]]*}"}
+        line=${line%"${line##*[![:space:]]}"}
+
+        # Print only the lines that have content left.
+        [[ $line ]] && printf '%s\n' "$line"
+    done < "$1"
+}
+```
+
+**Example Usage:**
+
+```shell
+$ cat hosts.conf
+# Production hosts
+10.0.0.1   web
+
+10.0.0.2   db      # primary database
+
+$ strip_comments hosts.conf
+10.0.0.1   web
+10.0.0.2   db
+```
+
+## Require that environment variables are set
+
+A pre-flight check for the top of deploy and CI scripts: fail fast and list
+*every* missing variable at once instead of dying on the first one. Both
+unset and empty variables count as missing, which is almost always what is
+wanted for mandatory settings. The names are looked up with indirect
+expansion (`${!var}`), so no external process is needed.
+
+**Example Function:**
+
+```sh
+require_vars() {
+    # Usage: require_vars "VAR1" "VAR2" ...
+    local var
+    local missing=()
+
+    for var in "$@"; do
+        [[ -z ${!var} ]] && missing+=("$var")
+    done
+
+    if ((${#missing[@]})); then
+        printf 'missing required variable: %s\n' "${missing[*]}" >&2
+        return 1
+    fi
+}
+```
+
+**Example Usage:**
+
+```shell
+$ export DATABASE_URL="postgres://localhost/app"
+$ export SECRET_KEY=""
+
+$ # SECRET_KEY is empty and API_TOKEN is unset, so both are reported.
+$ require_vars DATABASE_URL SECRET_KEY API_TOKEN
+missing required variable: SECRET_KEY API_TOKEN
+
+$ # Use it as a guard at the top of a script.
+$ require_vars DATABASE_URL || exit 1
+```
+
+## Validate the environment before running a script
+
+The pieces above combine into a small "fail fast" pre-flight block. It checks
+the `bash` version, makes sure the output directory exists and is writable,
+requires the mandatory variables and finally loads optional settings from a
+file with defaults for anything absent.
+
+**Example Usage in script:**
+
+```shell
+#!/usr/bin/env bash
+# Fail fast before doing any real work.
+
+# Bash 4+ is needed for the associative array below.
+((BASH_VERSINFO[0] >= 4)) || {
+    printf 'error: bash 4+ is required.\n' >&2
+    exit 1
+}
+
+# The output directory must exist and be writable.
+out_dir=${1:-./build}
+[[ -d $out_dir && -w $out_dir ]] || {
+    printf 'error: %s is not a writable directory.\n' "$out_dir" >&2
+    exit 1
+}
+
+# Mandatory variables must be present in the environment.
+require_vars DATABASE_URL SECRET_KEY || exit 1
+
+# Optional settings come from a file, with defaults for anything absent.
+declare -A config
+[[ -f app.env ]] && read_env app.env config
+port=${config[PORT]:-8080}
+
+printf 'environment ok, using port %s\n' "$port"
 ```
 
 <!-- CHAPTER END -->
