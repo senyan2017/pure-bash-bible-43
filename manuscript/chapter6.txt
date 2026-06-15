@@ -36,5 +36,4 @@ $ printf '%s\n' "$hello_world"
 value
 ```
 
-<!-- CHAPTER END -->
 

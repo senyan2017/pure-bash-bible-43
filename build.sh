@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
 #
-# Turn the single document bible into a book separated by chapters.
+# build.sh — Split the README.md into per-chapter manuscript files.
+#
+# Reads the single README.md, finds every <!-- CHAPTER START --> /
+# <!-- CHAPTER END --> pair, and writes the enclosed content to
+# manuscript/chapter{N}.txt.  Also regenerates manuscript/Book.txt so
+# it always reflects the current chapter list.
+#
+# Usage:
+#     ./build.sh
+#
+# The chapter-extraction logic lives in lib/markdown.sh so that any
+# other script that needs to understand the README's structure can
+# share the same rules.
 
-main() {
-    rm -rf manuscript
-    mkdir -p manuscript
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/markdown.sh"
 
-    # Split the README.md into chapters based on markers.
-    while IFS=$'\n' read -r line; do
-        [[ "$chap" ]] && chapter[$i]+="$line"$'\n'
-        [[ "$line" == "<!-- CHAPTER START -->" ]] && chap=1
-        [[ "$line" == "<!-- CHAPTER END -->" ]]   && { chap=; ((i++)); }
-    done < README.md
-
-    # Write the chapters to separate files.
-    for i in "${!chapter[@]}"; do
-        : "${chapter[$i]/$'\n'*}"; : "${_/\# }"; : "${_,,}"
-        printf '%s\n' "${chapter[$i]}" > "manuscript/chapter${i}.txt"
-        printf '%s\n' "chapter${i}.txt" >> "manuscript/Book.txt"
-    done
-}
-
-main
+extract_chapters README.md manuscript

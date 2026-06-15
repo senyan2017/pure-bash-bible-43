@@ -58,5 +58,4 @@ Contrary to popular belief, there is no issue in utilizing raw escape sequences.
 | `\e[2J\e[H` | Clear the screen and move cursor to `0,0`.
 
 
-<!-- CHAPTER END -->
 

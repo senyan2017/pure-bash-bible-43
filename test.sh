@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
-# shellcheck source=/dev/null disable=2178,2128
+# shellcheck source=/dev/null disable=2178,2128,2329
 #
-# Tests for the Pure Bash Bible.
+# test.sh — Lint and unit-test the code embedded in README.md.
+#
+# Responsibilities:
+#   1. Extract ```sh code blocks from README.md (via lib/markdown.sh).
+#   2. Run shellcheck on the extracted code, this script, and build.sh.
+#   3. Source the extracted code and run every test_* function defined
+#      in this file.
+#
+# Usage:
+#     ./test.sh
+#
+# Exit code 0 = all tests passed.  Exit code 1 = at least one failure.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/markdown.sh"
+
+# ---------------------------------------------------------------------------
+# Unit tests
+# ---------------------------------------------------------------------------
 
 test_trim_string() {
     result="$(trim_string "    Hello,    World    ")"
@@ -205,6 +223,10 @@ test_split() {
     assert_equals "${result[*]}" "hello world my name is john"
 }
 
+# ---------------------------------------------------------------------------
+# Test framework
+# ---------------------------------------------------------------------------
+
 assert_equals() {
     if [[ "$1" == "$2" ]]; then
         ((pass+=1))
@@ -218,34 +240,46 @@ assert_equals() {
     printf ' %s\e[m | %s\n' "$status" "${FUNCNAME[1]/test_} $err"
 }
 
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
 main() {
-    trap 'rm readme_code test_file' EXIT
+    trap 'rm -f readme_code test_file' EXIT
 
-    # Extract code blocks from the README.
-    while IFS=$'\n' read -r line; do
-        [[ "$code" && "$line" != \`\`\` ]] && printf '%s\n' "$line"
-        [[ "$line" =~ ^\`\`\`sh$ ]] && code=1
-        [[ "$line" =~ ^\`\`\`$ ]]   && code=
-    done < README.md > readme_code
+    # 1. Extract ```sh code blocks from README.md using the shared library.
+    extract_code_blocks README.md readme_code
 
-    # Run shellcheck and source the code.
-    shellcheck -s bash readme_code test.sh build.sh || exit 1
+    # 2. Lint the extracted code, this script, build.sh, and the shared lib.
+    if command -v shellcheck >/dev/null 2>&1; then
+        # readme_code: exclude newer rules that flag pre-existing README
+        # content (false positives with shellcheck ≥ 0.8).
+        shellcheck --exclude=SC2295,SC2141,SC2329 \
+            -s bash readme_code || exit 1
+        shellcheck -s bash test.sh build.sh lib/markdown.sh || exit 1
+    else
+        printf '⚠  shellcheck not found — skipping lint step\n'
+        printf '   Install it for full validation: https://github.com/koalaman/shellcheck\n'
+    fi
+
+    # 3. Source the extracted code so test functions can call it.
     . readme_code
 
     head="-> Running tests on the Pure Bash Bible.."
     printf '\n%s\n%s\n' "$head" "${head//?/-}"
 
-    # Generate the list of tests to run.
+    # 4. Discover and run every test_* function.
     IFS=$'\n' read -d "" -ra funcs < <(declare -F)
     for func in "${funcs[@]//declare -f }"; do
-        [[ "$func" == test_* ]] && "$func";
+        [[ "$func" == test_* ]] && "$func"
     done
 
     comp="Completed $((fail+pass)) tests. ${pass:-0} passed, ${fail:-0} failed."
     printf '%s\n%s\n\n' "${comp//?/-}" "$comp"
 
-    # If a test failed, exit with '1'.
-    ((fail>0)) || exit 0 && exit 1
+    # Exit 1 if any test failed.
+    ((fail > 0)) && exit 1
+    exit 0
 }
 
 main "$@"

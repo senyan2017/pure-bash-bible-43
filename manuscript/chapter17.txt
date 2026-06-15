@@ -75,5 +75,4 @@ $ get_cursor_pos
 1 8
 ```
 
-<!-- CHAPTER END -->
 

@@ -39,5 +39,4 @@ trap 'code_here' DEBUG
 trap 'code_here' RETURN
 ```
 
-<!-- CHAPTER END -->
 

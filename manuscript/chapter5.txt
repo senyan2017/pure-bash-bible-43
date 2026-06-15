@@ -72,5 +72,4 @@ $ basename ~/Pictures/Downloads/
 Downloads
 ```
 
-<!-- CHAPTER END -->
 

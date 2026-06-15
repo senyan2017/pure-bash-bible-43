@@ -130,5 +130,4 @@ cycle() {
 }
 ```
 
-<!-- CHAPTER END -->
 

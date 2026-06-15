@@ -6,5 +6,4 @@ Calling an external process in `bash` is expensive and excessive use will cause 
 
 The contents of this book provide a reference for solving problems encountered when writing programs and scripts in `bash`. Examples are in function formats showcasing how to incorporate these solutions into code.
 
-<!-- CHAPTER END -->
 

@@ -450,5 +450,4 @@ if [[ $var != *sub_string ]]; then
 fi
 ```
 
-<!-- CHAPTER END -->
 

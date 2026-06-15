@@ -1,15 +1,28 @@
-# Writing the Bible
+# Contributing to the Pure Bash Bible
 
-<!-- vim-markdown-toc GFM -->
+## Toolchain Overview
 
-* [Adding Code to the Bible.](#adding-code-to-the-bible)
-* [Special meanings for code blocks.](#special-meanings-for-code-blocks)
-* [Writing tests](#writing-tests)
-* [Running tests](#running-tests)
+The project uses a small set of bash scripts that share a common Markdown
+parsing library.  Every script has a single, clear responsibility:
 
-<!-- vim-markdown-toc -->
+| Script | What it does |
+|---|---|
+| `lib/markdown.sh` | Shared library — extracts chapters and `sh` code blocks from `README.md`. Both `build.sh` and `test.sh` source this file so parsing rules stay in one place. |
+| `build.sh` | Splits `README.md` into per-chapter files under `manuscript/` (for the Leanpub book). |
+| `test.sh` | Extracts `sh` code blocks from `README.md`, runs `shellcheck`, then runs every `test_*` function defined in `test.sh`. |
+| `check.sh` | **Single entry point.** Runs `build.sh` then `test.sh` and reports an overall pass/fail. Run this after any change. |
 
-## Adding Code to the Bible.
+### Quick validation
+
+```sh
+./check.sh
+```
+
+This regenerates the manuscript, lints the embedded code, and runs all unit
+tests.  If any step fails the pipeline stops immediately so you can fix
+issues one at a time.
+
+## Adding Code to the Bible
 
 - The code must use only `bash` built-ins.
     - A fallback to an external program is allowed if the code doesn't
@@ -22,29 +35,45 @@
 - Write some examples.
     - Show some input and the modified output.
 
+## Code Block Conventions
 
-## Special meanings for code blocks.
+`README.md` uses two types of fenced code blocks.  The language tag after
+the opening fence determines how the toolchain treats the block:
 
-Use `sh` for functions that should be linted and unit tested.
+| Fence tag | Meaning |
+|---|---|
+| ` ```sh ` | Tested and linted.  `test.sh` extracts these blocks, runs `shellcheck` on the result, and sources them so unit tests can call the functions. |
+| ` ```shell ` | Example only.  Ignored by the extraction pipeline — use this for demonstrations that should not be tested or linted. |
 
-    ```sh
-    # Shellcheck will lint this and the test script will source this.
-    func() {
-        # Usage: func "arg"
-        :
-    }
-    ```
+```sh
+# Shellcheck will lint this and the test script will source this.
+func() {
+    # Usage: func "arg"
+    :
+}
+```
 
-Use `shell` for code that should be ignored.
+```shell
+# Shorter file creation syntax — not linted or tested.
+:>file
+```
 
-    ```shell
-    # Shorter file creation syntax.
-    :>file
-    ```
+## Chapter Markers
 
-## Writing tests
+The manuscript build (`build.sh`) splits the README into chapters using
+HTML comment markers:
 
-The test file is viewable here: https://github.com/dylanaraps/pure-bash-bible/blob/master/test.sh
+```html
+<!-- CHAPTER START -->
+…chapter content…
+<!-- CHAPTER END -->
+```
+
+Each pair produces one `manuscript/chapter{N}.txt` file.  If you add or
+reorder chapters, just make sure the markers stay balanced — `check.sh`
+will catch mismatches.
+
+## Writing Tests
 
 Example test:
 
@@ -57,19 +86,28 @@ test_upper() {
 
 Steps:
 
-1. Write the test.
-    - Naming is `test_func_name`
+1. Write the test function in `test.sh`.
+    - Name it `test_<function_name>`.
     - Store the function output in a variable (`$result` or `${result[@]}`).
-    - Use `assert_equals` to test equality between the variable and the
-      expected output.
-2. The test script will automatically execute it. :+1:
+    - Use `assert_equals` to compare the result with the expected output.
+2. Run `./check.sh` — the test runner discovers `test_*` functions
+   automatically.
 
+## Project Structure
 
-## Running tests
-
-Running `test.sh` also runs `shellcheck` on the code.
-
-```sh
-cd pure-bash-bible
-./test.sh
+```
+.
+├── README.md           # The single source of truth (all snippets live here)
+├── CONTRIBUTING.md     # This file
+├── LICENSE.md
+├── .travis.yml         # CI — runs ./test.sh
+├── lib/
+│   └── markdown.sh     # Shared Markdown parsing (chapters + code blocks)
+├── build.sh            # README → manuscript/chapter*.txt
+├── test.sh             # Lint + unit tests
+├── check.sh            # Run everything (build + lint + test)
+└── manuscript/         # Generated chapter files (do not edit by hand)
+    ├── Book.txt
+    ├── chapter0.txt
+    └── ...
 ```

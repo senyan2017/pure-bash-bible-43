@@ -189,5 +189,4 @@ $ extract ~/projects/pure-bash/README.md '```sh' '```'
 # Output here...
 ```
 
-<!-- CHAPTER END -->
 
