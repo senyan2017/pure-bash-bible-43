@@ -90,5 +90,3 @@ Each time `$RANDOM` is used, a different integer between `0` and `32767` is retu
 "$RANDOM"
 ```
 
-<!-- CHAPTER END -->
-

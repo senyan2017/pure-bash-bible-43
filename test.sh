@@ -1,7 +1,27 @@
 #!/usr/bin/env bash
-# shellcheck source=/dev/null disable=2178,2128
+# shellcheck source=/dev/null disable=SC2178,SC2128
 #
 # Tests for the Pure Bash Bible.
+#
+# This script:
+#   1. Extracts ```sh code blocks from README.md into a temp file.
+#   2. Runs shellcheck (if available) on the extracted code + test.sh + build.sh.
+#   3. Sources the extracted code and runs all test_* functions defined below.
+#
+# Code block conventions (MUST be followed in README.md):
+#   - ```sh   => testable code (linted by shellcheck, sourced for tests)
+#   - ```shell => example/illustration only (ignored by this script)
+#   - Closing ``` MUST be on its own line with no language specifier.
+#
+set -o pipefail
+# NOTE: We do NOT use set -e because ((arith)) returning 0 would cause
+# spurious exits.  We also avoid set -u because the extracted README code
+# (documentation snippets) may use variables without prior initialization.
+# Errors are handled explicitly throughout.
+
+README='README.md'
+
+# --- Test functions ---------------------------------------------------------
 
 test_trim_string() {
     result="$(trim_string "    Hello,    World    ")"
@@ -76,7 +96,7 @@ test_reverse_array() {
 }
 
 test_cycle() {
-    # shellcheck disable=2034
+    # shellcheck disable=SC2034
     arr=(a b c d)
     result="$(cycle; cycle; cycle)"
     assert_equals "$result" "a b c "
@@ -205,47 +225,147 @@ test_split() {
     assert_equals "${result[*]}" "hello world my name is john"
 }
 
+# --- Test harness -----------------------------------------------------------
+
 assert_equals() {
     if [[ "$1" == "$2" ]]; then
-        ((pass+=1))
+        ((pass+=1)) || true
         status=$'\e[32m✔'
     else
-        ((fail+=1))
+        ((fail+=1)) || true
         status=$'\e[31m✖'
         local err="(\"$1\" != \"$2\")"
     fi
 
-    printf ' %s\e[m | %s\n' "$status" "${FUNCNAME[1]/test_} $err"
+    printf ' %s\e[m | %s\n' "$status" "${FUNCNAME[1]/test_} ${err:-}"
+}
+
+extract_code_blocks() {
+    # Extract ```sh code blocks from README.md.
+    # Rules:
+    #   - Opening: line matches exactly ```sh (with optional trailing CR).
+    #   - Closing: line matches exactly ``` (with optional trailing CR).
+    #   - Content between open/close is written to stdout.
+    #   - Empty blocks (open immediately followed by close) are skipped.
+    #   - If a block is never closed, we error out.
+    local code=
+    local block_has_content=
+    local lineno=0
+    local block_start=0
+
+    while IFS=$'\n' read -r line || [[ -n "$line" ]]; do
+        ((lineno++)) || true
+        # Strip trailing CR for CRLF tolerance.
+        line="${line%$'\r'}"
+
+        if [[ -n "$code" ]]; then
+            if [[ "$line" == '```' ]]; then
+                # Close the code block.
+                if [[ -z "$block_has_content" ]]; then
+                    printf 'warning: Empty ```sh code block at line %d of %s.\n' \
+                        "$block_start" "$README" >&2
+                fi
+                code=
+                continue
+            fi
+            block_has_content=1
+            printf '%s\n' "$line"
+        else
+            if [[ "$line" == '```sh' ]]; then
+                code=1
+                block_has_content=
+                block_start=$lineno
+            fi
+        fi
+    done < "$README"
+
+    # Detect unclosed code block.
+    if [[ -n "${code:-}" ]]; then
+        printf 'error: Unclosed ```sh code block starting at line %d of %s.\n' \
+            "$block_start" "$README" >&2
+        return 1
+    fi
 }
 
 main() {
-    trap 'rm readme_code test_file' EXIT
+    local pass=0 fail=0
+
+    # Validate README exists.
+    if [[ ! -f "$README" ]]; then
+        printf 'error: %s not found.\n' "$README" >&2
+        exit 1
+    fi
+
+    # Clean up temp files on exit.
+    trap 'rm -f readme_code test_file' EXIT
 
     # Extract code blocks from the README.
-    while IFS=$'\n' read -r line; do
-        [[ "$code" && "$line" != \`\`\` ]] && printf '%s\n' "$line"
-        [[ "$line" =~ ^\`\`\`sh$ ]] && code=1
-        [[ "$line" =~ ^\`\`\`$ ]]   && code=
-    done < README.md > readme_code
+    if ! extract_code_blocks > readme_code; then
+        printf 'error: Code block extraction failed.\n' >&2
+        exit 1
+    fi
 
-    # Run shellcheck and source the code.
-    shellcheck -s bash readme_code test.sh build.sh || exit 1
-    . readme_code
+    # Validate that code was actually extracted.
+    if [[ ! -s readme_code ]]; then
+        printf 'error: No ```sh code blocks found in %s.\n' "$README" >&2
+        printf '  Expected at least one ```sh ... ``` block with testable code.\n' >&2
+        exit 1
+    fi
 
-    head="-> Running tests on the Pure Bash Bible.."
-    printf '\n%s\n%s\n' "$head" "${head//?/-}"
+    # Run shellcheck if available.
+    if command -v shellcheck >/dev/null 2>&1; then
+        printf '%s\n' '-> Running shellcheck...'
+        # Exclude codes that are expected in documentation code snippets:
+        #   SC2295: Expansions inside ${..} need quoting (intentional pattern matching)
+        #   SC2329: Function never invoked (called indirectly via declare -F)
+        #   SC2141: IFS contains literal letter (documented behavior)
+        #   SC2016: Expressions don't expand in single quotes (intentional literal)
+        #   SC2004: $/${} unnecessary on arithmetic (style preference)
+        if ! shellcheck -s bash \
+            -e SC2295,SC2329,SC2141,SC2016,SC2004 \
+            readme_code test.sh build.sh; then
+            printf 'error: shellcheck found issues.\n' >&2
+            exit 1
+        fi
+    else
+        printf 'warning: shellcheck not found, skipping lint.\n' >&2
+    fi
 
-    # Generate the list of tests to run.
-    IFS=$'\n' read -d "" -ra funcs < <(declare -F)
+    # Source the extracted code.
+    # shellcheck disable=SC1091
+    if ! . readme_code; then
+        printf 'error: Failed to source extracted code from %s.\n' "$README" >&2
+        exit 1
+    fi
+
+    local head_msg="-> Running tests on the Pure Bash Bible.."
+    printf '\n%s\n%s\n' "$head_msg" "${head_msg//?/-}"
+
+    # Discover and run all test_* functions.
+    local funcs
+    IFS=$'\n' read -d "" -ra funcs < <(declare -F) || true
+    local test_count=0
     for func in "${funcs[@]//declare -f }"; do
-        [[ "$func" == test_* ]] && "$func";
+        if [[ "$func" == test_* ]]; then
+            "$func"
+            ((test_count++)) || true
+        fi
     done
 
-    comp="Completed $((fail+pass)) tests. ${pass:-0} passed, ${fail:-0} failed."
+    # Validate that tests actually ran.
+    if ((test_count == 0)); then
+        printf 'error: No test_* functions found in test.sh.\n' >&2
+        exit 1
+    fi
+
+    local comp="Completed $((fail+pass)) tests. ${pass:-0} passed, ${fail:-0} failed."
     printf '%s\n%s\n\n' "${comp//?/-}" "$comp"
 
-    # If a test failed, exit with '1'.
-    ((fail>0)) || exit 0 && exit 1
+    # Exit with 1 if any test failed.
+    if ((fail > 0)); then
+        exit 1
+    fi
+    exit 0
 }
 
 main "$@"

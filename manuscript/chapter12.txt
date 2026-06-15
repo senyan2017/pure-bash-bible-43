@@ -27,5 +27,3 @@
 ((var=var2>var?var2:var))
 ```
 
-<!-- CHAPTER END -->
-

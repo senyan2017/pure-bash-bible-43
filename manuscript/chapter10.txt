@@ -55,5 +55,3 @@
 | `var < var2` | Less than (*in ASCII alphabetical order.*)
 | `var > var2` | Greater than (*in ASCII alphabetical order.*)
 
-<!-- CHAPTER END -->
-

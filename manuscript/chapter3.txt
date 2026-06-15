@@ -91,5 +91,3 @@ done
 shopt -u globstar
 ```
 
-<!-- CHAPTER END -->
-

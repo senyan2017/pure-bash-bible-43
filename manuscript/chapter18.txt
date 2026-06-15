@@ -143,5 +143,3 @@ esac
 os="$_"
 ```
 
-<!-- CHAPTER END -->
-

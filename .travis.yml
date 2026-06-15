@@ -4,4 +4,6 @@ os:
     - linux
 
 script:
+    - ./validate.sh
     - ./test.sh
+    - ./build.sh
