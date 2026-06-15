@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# shellcheck source=/dev/null disable=2178,2128
+# shellcheck disable=SC2178,SC2128
 #
 # Tests for the Pure Bash Bible.
+
+cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
+
+# Shared chapter/fence rules, kept in sync with build.sh.
+# shellcheck source=lib.sh
+source ./lib.sh
 
 test_trim_string() {
     result="$(trim_string "    Hello,    World    ")"
